@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<title>Mis Finanzas — chequeos internos</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; }
+  .ok { color: #0ca30c; } .fail { color: #d03b3b; font-weight: 700; }
+  li { margin-bottom: 4px; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<h1>Chequeos internos de Mis Finanzas</h1>
+<p>Esta página no es parte de la app — valida a mano la lógica más delicada (fechas de recurrentes, formato de moneda, hash del PIN) antes de confiar en un cambio. Revisa la consola del navegador si algo falla.</p>
+<ul id="results"></ul>
+
+<script type="module">
+  import { formatMoney, addMonthsToYearMonth, compareYearMonth, resolvedDayNumber, resolvedDateForYearMonth, daysInMonth } from "./js/format.js";
+  import { computePendingYearMonths } from "./js/db.js";
+  import { hashPin, verifyPin } from "./js/crypto-pin.js";
+
+  const list = document.getElementById("results");
+  let passCount = 0, failCount = 0;
+
+  function check(name, condition) {
+    const li = document.createElement("li");
+    if (condition) {
+      li.innerHTML = `<span class="ok">✓ PASS</span> — ${name}`;
+      passCount++;
+    } else {
+      li.innerHTML = `<span class="fail">✗ FAIL</span> — ${name}`;
+      failCount++;
+      console.error("FAIL:", name);
+    }
+    list.appendChild(li);
+    console.assert(condition, name);
+  }
+
+  // --- Formato de moneda ---
+  check("formatMoney(50000) contiene 50.000", formatMoney(50000).includes("50.000"));
+  check("formatMoney(0) no lanza error", formatMoney(0).length > 0);
+  check("formatMoney no muestra decimales", !formatMoney(1234.56).includes(","));
+
+  // --- Utilidades de fecha ---
+  check("addMonthsToYearMonth avanza diciembre -> enero del año siguiente", addMonthsToYearMonth("2025-12", 1) === "2026-01");
+  check("addMonthsToYearMonth retrocede enero -> diciembre del año anterior", addMonthsToYearMonth("2026-01", -1) === "2025-12");
+  check("compareYearMonth ordena correctamente", compareYearMonth("2026-02", "2026-10") < 0);
+  check("resolvedDayNumber recorta día 31 en febrero", resolvedDayNumber(31, "2025-02") === 28);
+  check("resolvedDayNumber recorta día 31 en febrero bisiesto", resolvedDayNumber(31, "2024-02") === 29);
+  check('resolvedDayNumber "last" devuelve el último día del mes', resolvedDayNumber("last", "2026-04") === 30);
+  check("resolvedDateForYearMonth arma fecha con padding", resolvedDateForYearMonth(5, "2026-03") === "2026-03-05");
+  check("daysInMonth conoce febrero bisiesto", daysInMonth(2024, 2) === 29 && daysInMonth(2023, 2) === 28);
+
+  // --- Lógica de recurrentes pendientes ---
+  const recNuevo = { dayOfMonth: 10, startYearMonth: "2026-07", lastAppliedYearMonth: null };
+  check("recurrente nuevo, antes del día programado -> sin pendientes", computePendingYearMonths(recNuevo, "2026-07", 5).length === 0);
+  check("recurrente nuevo, después del día programado -> 1 pendiente (mes actual)", computePendingYearMonths(recNuevo, "2026-07", 15).length === 1);
+
+  const recAtrasado = { dayOfMonth: 1, startYearMonth: "2026-04", lastAppliedYearMonth: null };
+  const pendientesAtrasado = computePendingYearMonths(recAtrasado, "2026-07", 20);
+  check("recurrente atrasado varios meses -> aparecen TODOS los meses (no solo el actual)", pendientesAtrasado.length === 4 && pendientesAtrasado[0] === "2026-04" && pendientesAtrasado[3] === "2026-07");
+
+  const recAlDia = { dayOfMonth: 1, startYearMonth: "2026-04", lastAppliedYearMonth: "2026-07" };
+  check("recurrente ya aplicado este mes -> no vuelve a aparecer (idempotencia)", computePendingYearMonths(recAlDia, "2026-07", 25).length === 0);
+
+  // --- PIN (Web Crypto / PBKDF2) ---
+  try {
+    const bundle = await hashPin("1234");
+    const okMatch = await verifyPin("1234", bundle);
+    const okNoMatch = await verifyPin("9999", bundle);
+    check("verifyPin acepta el PIN correcto", okMatch === true);
+    check("verifyPin rechaza un PIN incorrecto", okNoMatch === false);
+    check("hashPin nunca guarda el PIN en texto plano", !JSON.stringify(bundle).includes("1234"));
+  } catch (err) {
+    check("PBKDF2 (Web Crypto) disponible en este navegador: " + err.message, false);
+  }
+
+  const summary = document.createElement("li");
+  summary.style.marginTop = "16px";
+  summary.style.fontWeight = "700";
+  summary.textContent = `Resultado: ${passCount} OK / ${failCount} fallidos`;
+  list.appendChild(summary);
+</script>
+</body>
+</html>
